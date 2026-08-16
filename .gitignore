@@ -1,0 +1,60 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+fuze-scheduler
+
+# Build output
+build/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# Frontend
+node_modules/
+dist/
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+.logs/
+
+# Runtime PIDs
+.pids/
+
+# Docker
+*.dockerignore
+
+.trae/

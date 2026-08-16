@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fuze-postgres
+  namespace: fuze-ai-paas
+  labels:
+    app: fuze-postgres
+spec:
+  # Headless Service：StatefulSet Pod 以 fuze-postgres-0.fuze-postgres 稳定寻址。
+  clusterIP: None
+  ports:
+  - port: 5432
+    targetPort: 5432
+    protocol: TCP
+    name: postgres
+  selector:
+    app: fuze-postgres

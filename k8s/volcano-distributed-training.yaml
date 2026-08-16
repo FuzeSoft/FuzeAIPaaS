@@ -1,0 +1,77 @@
+# ============================================================
+# Volcano 分布式训练示例（PyTorch DDP）
+# - master(1) + worker(N) 多任务，Gang 调度保证同时启动
+# - 通过 pytorch 插件自动注入 MASTER_ADDR/MASTER_PORT/WORLD_SIZE/RANK
+# - 挂载 Fluid 数据集加速数据读取
+# - HAMi 显存隔离（可选）
+# ============================================================
+apiVersion: batch.volcano.sh/v1alpha1
+kind: Job
+metadata:
+  name: pytorch-ddp-training
+  namespace: fuze-ai-paas
+  labels:
+    app: fuze-ai-paas
+    distributed: "true"
+    managed-by: fuze-scheduler
+spec:
+  minAvailable: 3            # master(1) + worker(2) 全部就绪才调度
+  schedulerName: volcano
+  queue: default
+  plugins:
+    env: []
+    svc: []
+    pytorch: ["--master=master", "--worker=worker", "--port=23456"]
+  tasks:
+    - name: master
+      replicas: 1
+      template:
+        metadata:
+          labels:
+            app: fuze-ai-paas
+            task-role: master
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: pytorch
+              image: pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
+              command: ["/bin/sh", "-c"]
+              args:
+                - "torchrun --nnodes=$WORLD_SIZE --node_rank=$RANK --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT train.py"
+              resources:
+                limits:
+                  memory: 32Gi
+                  nvidia.com/gpu: "1"
+              volumeMounts:
+                - name: fluid-dataset
+                  mountPath: /data
+          volumes:
+            - name: fluid-dataset
+              persistentVolumeClaim:
+                claimName: imagenet-1k
+    - name: worker
+      replicas: 2
+      template:
+        metadata:
+          labels:
+            app: fuze-ai-paas
+            task-role: worker
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: pytorch
+              image: pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
+              command: ["/bin/sh", "-c"]
+              args:
+                - "torchrun --nnodes=$WORLD_SIZE --node_rank=$RANK --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT train.py"
+              resources:
+                limits:
+                  memory: 32Gi
+                  nvidia.com/gpu: "1"
+              volumeMounts:
+                - name: fluid-dataset
+                  mountPath: /data
+          volumes:
+            - name: fluid-dataset
+              persistentVolumeClaim:
+                claimName: imagenet-1k

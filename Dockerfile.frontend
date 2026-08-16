@@ -1,0 +1,35 @@
+FROM node:18-alpine AS builder
+
+# 国内 npm 源（构建环境无法直连 registry.npmjs.org 时使用）
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ENV npm_config_registry=$NPM_REGISTRY
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY frontend/ ./frontend/
+
+RUN cd frontend && npm install && npm run build
+
+FROM node:18-alpine
+
+# 以非 root 用户运行（安全基线）。
+RUN addgroup -S -g 10002 app \
+    && adduser -S -D -H -u 10002 -G app app
+
+WORKDIR /app
+
+COPY --from=builder /app/frontend/dist ./dist
+
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ENV npm_config_registry=$NPM_REGISTRY
+
+RUN npm install -g serve
+
+USER 10002:10002
+
+EXPOSE 3000
+
+CMD ["serve", "-s", "dist", "-l", "3000"]

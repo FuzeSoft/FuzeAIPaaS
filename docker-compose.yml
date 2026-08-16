@@ -1,0 +1,52 @@
+# 本地开发编排：自托管 PostgreSQL，消除 SQLite 单点。
+# 用法：
+#   make db-up        # 启动 postgres（后台）
+#   make db-down      # 停止并保留数据卷
+#   make db-reset     # 停止并清空数据卷
+# 本地直接跑后端（非容器）：
+#   export DB_DRIVER=postgres
+#   export DB_DSN="postgres://fuze:fuze@localhost:5432/fuze?sslmode=disable"
+#   make run
+# 或用 compose 内 backend 服务（已配好 DB_DSN，依赖 postgres 健康）：
+#   docker compose up --build
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: fuze-postgres
+    environment:
+      POSTGRES_DB: fuze
+      POSTGRES_USER: fuze
+      POSTGRES_PASSWORD: fuze
+    # 仅绑定本机回环，避免开发库对局域网/公网开放。
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fuze -d fuze"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # 本地也可直接起后端；默认注释掉，避免与宿主机 make run 冲突。
+  # 取消注释后：docker compose up --build
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: fuze-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_DRIVER: postgres
+      DB_DSN: "postgres://fuze:fuze@postgres:5432/fuze?sslmode=disable"
+      GIN_MODE: release
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

@@ -1,0 +1,35 @@
+apiVersion: scheduling.volcano.sh/v1beta1
+kind: Queue
+metadata:
+  name: inference-queue
+  namespace: fuze-ai-paas
+spec:
+  weight: 10
+  priority: 1000
+  capability:
+    cpu: "10"
+    memory: "100Gi"
+---
+apiVersion: scheduling.volcano.sh/v1beta1
+kind: Queue
+metadata:
+  name: training-queue
+  namespace: fuze-ai-paas
+spec:
+  weight: 5
+  priority: 100
+  capability:
+    cpu: "40"
+    memory: "400Gi"
+---
+apiVersion: scheduling.volcano.sh/v1beta1
+kind: Queue
+metadata:
+  name: batch-queue
+  namespace: fuze-ai-paas
+spec:
+  weight: 3
+  priority: 50
+  capability:
+    cpu: "20"
+    memory: "200Gi"

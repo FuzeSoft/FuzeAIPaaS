@@ -1,0 +1,40 @@
+# ============================================================
+# HAMi (Heterogeneous AI Computing Virtualization Middleware)
+# GPU 显存与算力隔离
+#
+# 说明：
+#   HAMi 通过替换 NVIDIA device plugin，将单张物理 GPU 虚拟化为多份，
+#   支持按显存 (nvidia.com/gpumem, MiB) 和算力 (nvidia.com/gpucores, %) 细粒度切分。
+#
+# 安装（推荐 helm）：
+#   helm repo add hami-charts https://project-hami.github.io/HAMi/
+#   helm install hami hami-charts/hami \
+#     --set scheduler.kubeScheduler.imageTag=$(kubectl version -o json | jq -r .serverVersion.gitVersion) \
+#     -n kube-system
+#
+# 本文件提供：为需要 GPU 隔离的节点打标签，以及一个隔离验证 Pod 示例。
+# ============================================================
+---
+# 为 GPU 节点启用 HAMi（示例，按实际节点名调整）
+# kubectl label node <gpu-node> gpu=on
+#
+# 显存/算力隔离验证 Pod：申请 3000MiB 显存 + 30% 算力
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hami-isolation-test
+  namespace: fuze-ai-paas
+  labels:
+    app: fuze-ai-paas
+    purpose: hami-test
+spec:
+  restartPolicy: OnFailure
+  containers:
+    - name: cuda
+      image: nvidia/cuda:12.2.0-base-ubuntu22.04
+      command: ["nvidia-smi", "-L"]
+      resources:
+        limits:
+          nvidia.com/gpu: "1"        # 使用 1 张共享 GPU
+          nvidia.com/gpumem: "3000"  # 隔离 3000 MiB 显存
+          nvidia.com/gpucores: "30"  # 隔离 30% 算力

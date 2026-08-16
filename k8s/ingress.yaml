@@ -1,0 +1,43 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fuze-ai-paas-ingress
+  namespace: fuze-ai-paas
+  # 生产环境启用 TLS。若使用 cert-manager，取消下列注解并配置 ClusterIssuer；
+  # 否则请预先创建含证书的 Secret（tlsSecretName）再放开 tls 段。
+  # annotations:
+  #   cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  #   nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  # TLS：正式令牌经 HttpOnly Cookie 承载，若不走 HTTPS 则 Cookie 的 Secure 标记
+  # 不生效、令牌可被中间人窃取，因此生产必须启用 HTTPS。
+  tls:
+  - hosts:
+    - fuze-ai-paas.local
+    secretName: fuze-ai-paas-tls
+  rules:
+  - host: fuze-ai-paas.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: fuze-frontend
+            port:
+              number: 3000
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: fuze-backend
+            port:
+              number: 8080
+      # Grafana 监控大盘（Grafana 已配置 serve_from_sub_path + root_url=/grafana）
+      - path: /grafana
+        pathType: Prefix
+        backend:
+          service:
+            name: grafana
+            port:
+              number: 3000

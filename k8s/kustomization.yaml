@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fuze-ai-paas
+
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - backend-secret.yaml
+  - postgres-statefulset.yaml
+  - postgres-service.yaml
+  - backend-deployment.yaml
+  - backend-service.yaml
+  - frontend-deployment.yaml
+  - frontend-service.yaml
+  - ingress.yaml
+  - volcano-queue.yaml
+  - monitoring.yaml
+
+# 以下为依赖外部 CRD 的能力示例，按需在安装对应组件后单独 apply：
+#   - kserve-inferenceservice-example.yaml   (需安装 KServe)
+#   - fluid-dataset-example.yaml             (需安装 Fluid)
+#   - hami-device-plugin.yaml                (需安装 HAMi)
+#   - volcano-distributed-training.yaml      (需安装 Volcano + Fluid)

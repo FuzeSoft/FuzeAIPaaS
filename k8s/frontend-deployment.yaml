@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fuze-frontend
+  namespace: fuze-ai-paas
+  labels:
+    app: fuze-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fuze-frontend
+  template:
+    metadata:
+      labels:
+        app: fuze-frontend
+    spec:
+      # 非 root 运行 + 最小能力集（安全基线）。
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10002
+        runAsGroup: 10002
+        fsGroup: 10002
+        allowPrivilegeEscalation: false
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: fuze-frontend
+        # 镜像 tag 由 CI 注入（见 Makefile IMAGE_TAG）。勿用 latest（不可复现）。
+        # imagePullPolicy: Always 确保 K8s 拉取指定 tag 的新镜像。
+        image: fuze-ai-paas-frontend:$(IMAGE_TAG)
+        imagePullPolicy: Always
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        ports:
+        - containerPort: 3000
+          name: http
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5

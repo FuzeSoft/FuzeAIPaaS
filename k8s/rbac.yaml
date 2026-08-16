@@ -1,0 +1,59 @@
+# ServiceAccount for backend to manage Volcano resources
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fuze-backend
+  namespace: fuze-ai-paas
+---
+# Role: 管理 Volcano Jobs
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fuze-backend-volcano
+  namespace: fuze-ai-paas
+rules:
+  # Volcano Job CRD 权限
+  - apiGroups: ["batch.volcano.sh"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Volcano Queue CRD 权限（只读）
+  - apiGroups: ["scheduling.volcano.sh"]
+    resources: ["queues", "podgroups"]
+    verbs: ["get", "list", "watch"]
+  # KServe 推理服务 CRD 权限
+  - apiGroups: ["serving.kserve.io"]
+    resources: ["inferenceservices", "inferenceservices/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Fluid 数据集与缓存运行时 CRD 权限
+  - apiGroups: ["data.fluid.io"]
+    resources:
+      - "datasets"
+      - "datasets/status"
+      - "alluxioruntimes"
+      - "juicefsruntimes"
+      - "goosefsruntimes"
+      - "vineyardruntimes"
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # PVC 权限（Fluid 会为 Dataset 创建 PVC，任务挂载需要引用）
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  # Pod 权限（查看 Volcano 创建的 Pod）
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+# RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fuze-backend-volcano
+  namespace: fuze-ai-paas
+subjects:
+  - kind: ServiceAccount
+    name: fuze-backend
+    namespace: fuze-ai-paas
+roleRef:
+  kind: Role
+  name: fuze-backend-volcano
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,679 @@
+# ============================================================
+# Prometheus + Alertmanager + Grafana 监控栈
+# 抓取后端 /metrics 端点（Prometheus 文本曝露格式）；
+# Prometheus 原生评估告警规则（rule_files）并把 alerts 发往 Alertmanager；
+# Grafana 提供多张仪表盘与告警可视化。
+# 平台内管理的告警规则（API+DB）由后端经 rules renderer 渲染为 rule_files，
+# 这里预置一批内置规则作为基线，二者并存于 /etc/prometheus/rules。
+# ============================================================
+---
+# ---------- Prometheus RBAC（服务发现需要读取 pods/endpoints/nodes） ----------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: fuze-ai-paas
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fuze-prometheus
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/metrics", "services", "endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fuze-prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: fuze-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: fuze-ai-paas
+---
+# ---------- Prometheus 配置 ----------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: fuze-ai-paas
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    # 平台内管理的告警规则由后端渲染到 /etc/prometheus/rules（注入为 ConfigMap），
+    # 这里再叠加预置基线规则。两者均被下列 glob 覆盖。
+    rule_files:
+      - /etc/prometheus/rules/*.yml
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: ['alertmanager:9093']
+    scrape_configs:
+      # 抓取带 prometheus.io/scrape 注解的 Pod（含 fuze-backend）
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: ['fuze-ai-paas']
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+      # 直接抓取后端 Service
+      - job_name: 'fuze-backend'
+        metrics_path: /metrics
+        static_configs:
+          - targets: ['fuze-backend:8080']
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: fuze-ai-paas
+  labels:
+    app: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.51.0
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time=15d"
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: rules
+              mountPath: /etc/prometheus/rules
+            - name: data
+              mountPath: /prometheus
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: rules
+          configMap:
+            name: prometheus-rules
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: fuze-ai-paas
+  labels:
+    app: prometheus
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
+---
+# ---------- 预置告警规则（基线；平台内规则另由后端渲染注入） ----------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  namespace: fuze-ai-paas
+data:
+  preset-rules.yml: |
+    groups:
+      - name: fuze-platform-baseline
+        rules:
+          # 节点 NotReady 超过 5 分钟
+          - alert: NodeNotReady
+            expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "节点 {{ $labels.node }} 不可用超过 5 分钟"
+              description: "节点 {{ $labels.node }} 的 Ready 条件为 false，可能下线或网络异常。"
+          # 后端 5xx 错误率过高
+          - alert: BackendHigh5xxRate
+            expr: sum(rate(fuze_http_errors_total{code=~"5.."}[5m])) / sum(rate(fuze_http_requests_total[5m])) > 0.05
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "后端 5xx 错误率超过 5%"
+              description: "近 5 分钟 5xx 错误率 {{ $value | humanizePercentage }}，请排查后端稳定性。"
+          # 推理服务不可用
+          - alert: InferenceServiceUnavailable
+            expr: fuze_inference_services_ready == 0
+            for: 3m
+            labels:
+              severity: critical
+            annotations:
+              summary: "无可用推理服务"
+              description: "就绪推理服务数为 0 已持续 3 分钟。"
+          # P99 请求延迟过高
+          - alert: HighRequestLatencyP99
+            expr: histogram_quantile(0.99, sum(rate(fuze_http_request_duration_seconds_bucket[5m])) by (le)) > 2
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "P99 延迟超过 2s"
+              description: "后端 P99 延迟 {{ $value }}s 持续 10 分钟。"
+          # 任务连续失败
+          - alert: JobFailuresSpike
+            expr: sum(increase(fuze_job_executions_total{status="failed"}[10m])) > 5
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "近 10 分钟失败任务数较多"
+              description: "近 10 分钟失败任务 {{ $value }} 个。"
+          # GPU 利用率异常偏低（疑似空闲浪费）
+          - alert: GPUIdle
+            expr: avg(fuze_gpu_utilization_percent) < 5
+            for: 30m
+            labels:
+              severity: info
+            annotations:
+              summary: "GPU 平均利用率低于 5%"
+              description: "GPU 集群平均利用率 {{ $value }}% 持续 30 分钟，可能存在资源浪费。"
+          # Pod CrashLoopBackOff
+          - alert: PodCrashLooping
+            expr: rate(kube_pod_container_status_restarts_total[15m]) > 0
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Pod {{ $labels.pod }} 频繁重启"
+              description: "容器 {{ $labels.container }} 在 15 分钟内持续重启，疑似 CrashLoopBackOff。"
+---
+# ---------- Alertmanager（接收 Prometheus alerts 并路由/静默/通知） ----------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: fuze-ai-paas
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: 'null'
+      group_by: ['alertname', 'severity']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      routes:
+        - matchers:
+            - severity = "critical"
+          receiver: 'null'
+    receivers:
+      # 默认不向外部发送（运维按需在 Alertmanager 配置中接入 webhook/email）。
+      # 平台内「活跃告警」经 Prometheus /api/v1/alerts 实时展示，不依赖外发。
+      - name: 'null'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: fuze-ai-paas
+  labels:
+    app: alertmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.27.0
+          args:
+            - "--config.file=/etc/alertmanager/alertmanager.yml"
+            - "--storage.path=/alertmanager"
+          ports:
+            - containerPort: 9093
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: fuze-ai-paas
+  labels:
+    app: alertmanager
+spec:
+  selector:
+    app: alertmanager
+  ports:
+    - port: 9093
+      targetPort: 9093
+---
+# ---------- Grafana 数据源与仪表盘 provisioning ----------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: fuze-ai-paas
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+  dashboard-provider.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'fuze'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: fuze-ai-paas
+data:
+  fuze-ai-overview.json: |
+    {
+      "uid": "fuze-ai-overview",
+      "title": "Fuze AI PaaS",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "panels": [
+        {
+          "type": "gauge",
+          "title": "GPU 利用率",
+          "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+          "targets": [{"expr": "fuze_gpu_utilization_percent"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "max": 100}}
+        },
+        {
+          "type": "gauge",
+          "title": "显存利用率",
+          "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
+          "targets": [{"expr": "fuze_memory_utilization_percent"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "max": 100}}
+        },
+        {
+          "type": "stat",
+          "title": "运行中任务",
+          "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+          "targets": [{"expr": "fuze_jobs{status=\"running\"}"}]
+        },
+        {
+          "type": "stat",
+          "title": "就绪推理服务",
+          "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+          "targets": [{"expr": "fuze_inference_services_ready"}]
+        },
+        {
+          "type": "timeseries",
+          "title": "GPU 使用趋势",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [
+            {"expr": "fuze_gpu_used", "legendFormat": "已用"},
+            {"expr": "fuze_gpu_total", "legendFormat": "总数"}
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "数据集缓存命中率",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [{"expr": "fuze_dataset_cached_percent", "legendFormat": "{{dataset}}"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "max": 100}}
+        }
+      ]
+    }
+  fuze-gpu.json: |
+    {
+      "uid": "fuze-gpu",
+      "title": "GPU 资源",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "GPU 利用率",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "targets": [{"expr": "fuze_gpu_utilization_percent", "legendFormat": "{{node}}/{{gpu}}"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "max": 100}}
+        },
+        {
+          "type": "timeseries",
+          "title": "显存利用率",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "targets": [{"expr": "fuze_memory_utilization_percent", "legendFormat": "{{node}}/{{gpu}}"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "max": 100}}
+        },
+        {
+          "type": "timeseries",
+          "title": "GPU 温度",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [{"expr": "fuze_gpu_temperature_celsius", "legendFormat": "{{node}}/{{gpu}}"}],
+          "fieldConfig": {"defaults": {"unit": "celsius"}}
+        },
+        {
+          "type": "timeseries",
+          "title": "GPU 功耗",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [{"expr": "fuze_gpu_power_watts", "legendFormat": "{{node}}/{{gpu}}"}],
+          "fieldConfig": {"defaults": {"unit": "watt"}}
+        },
+        {
+          "type": "stat",
+          "title": "GPU 使用/总数",
+          "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
+          "targets": [{"expr": "fuze_gpu_used"}, {"expr": "fuze_gpu_total"}]
+        },
+        {
+          "type": "timeseries",
+          "title": "节点 GPU 拓扑",
+          "gridPos": {"h": 8, "w": 16, "x": 8, "y": 16},
+          "targets": [{"expr": "fuze_gpu_total", "legendFormat": "{{node}}"}]
+        }
+      ]
+    }
+  fuze-jobs.json: |
+    {
+      "uid": "fuze-jobs",
+      "title": "训练/推理任务",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "15s",
+      "panels": [
+        {
+          "type": "stat",
+          "title": "运行中任务",
+          "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+          "targets": [{"expr": "fuze_jobs{status=\"running\"}"}]
+        },
+        {
+          "type": "stat",
+          "title": "排队中任务",
+          "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
+          "targets": [{"expr": "fuze_jobs{status=\"queued\"}"}]
+        },
+        {
+          "type": "stat",
+          "title": "失败任务(近1h)",
+          "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+          "targets": [{"expr": "increase(fuze_job_executions_total{status=\"failed\"}[1h])"}]
+        },
+        {
+          "type": "stat",
+          "title": "成功率",
+          "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+          "targets": [{"expr": "sum(rate(fuze_job_executions_total{status=\"succeeded\"}[1h])) / sum(rate(fuze_job_executions_total[1h]))"}],
+          "fieldConfig": {"defaults": {"unit": "percentunit", "max": 1}}
+        },
+        {
+          "type": "timeseries",
+          "title": "任务执行数(按状态)",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [{"expr": "sum(rate(fuze_job_executions_total[5m])) by (status)", "legendFormat": "{{status}}"}]
+        },
+        {
+          "type": "timeseries",
+          "title": "平均运行时长",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [{"expr": "fuze_job_duration_seconds", "legendFormat": "{{job}}"}],
+          "fieldConfig": {"defaults": {"unit": "s"}}
+        }
+      ]
+    }
+  fuze-latency-error.json: |
+    {
+      "uid": "fuze-latency-error",
+      "title": "延迟与错误率",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "15s",
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "请求延迟 P50/P95/P99",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "targets": [
+            {"expr": "histogram_quantile(0.50, sum(rate(fuze_http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P50"},
+            {"expr": "histogram_quantile(0.95, sum(rate(fuze_http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P95"},
+            {"expr": "histogram_quantile(0.99, sum(rate(fuze_http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P99"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "s"}}
+        },
+        {
+          "type": "timeseries",
+          "title": "5xx 错误率",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "targets": [{"expr": "sum(rate(fuze_http_errors_total{code=~\"5..\"}[5m])) / sum(rate(fuze_http_requests_total[5m]))", "legendFormat": "5xx"}],
+          "fieldConfig": {"defaults": {"unit": "percentunit", "max": 1}}
+        },
+        {
+          "type": "timeseries",
+          "title": "请求数(按路由)",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [{"expr": "sum(rate(fuze_http_requests_total[5m])) by (route)", "legendFormat": "{{route}}"}]
+        },
+        {
+          "type": "timeseries",
+          "title": "令牌消耗速率",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [{"expr": "sum(rate(fuze_gateway_tokens_total[5m])) by (tenant_id)", "legendFormat": "{{tenant_id}}"}]
+        }
+      ]
+    }
+  fuze-quota-slo.json: |
+    {
+      "uid": "fuze-quota-slo",
+      "title": "配额与 SLO",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "panels": [
+        {
+          "type": "stat",
+          "title": "SLO 达成率(近24h)",
+          "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+          "targets": [{"expr": "1 - (sum(increase(fuze_http_errors_total{code=~\"5..\"}[24h])) / sum(increase(fuze_http_requests_total[24h])))"}],
+          "fieldConfig": {"defaults": {"unit": "percentunit", "max": 1, "min": 0}}
+        },
+        {
+          "type": "timeseries",
+          "title": "配额用量(按租户)",
+          "gridPos": {"h": 8, "w": 16, "x": 8, "y": 0},
+          "targets": [{"expr": "fuze_quota_used{resource=\"gpu\"}", "legendFormat": "{{tenant_id}}"}],
+          "fieldConfig": {"defaults": {"unit": "short"}}
+        },
+        {
+          "type": "timeseries",
+          "title": "预算消耗速率",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [{"expr": "sum(rate(fuze_budget_cost_total[1h])) by (tenant_id)", "legendFormat": "{{tenant_id}}"}],
+          "fieldConfig": {"defaults": {"unit": "currencyUSD"}}
+        },
+        {
+          "type": "timeseries",
+          "title": "活跃租户数",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [{"expr": "count(fuze_quota_used > 0)"}]
+        }
+      ]
+    }
+  fuze-alerts.json: |
+    {
+      "uid": "fuze-alerts",
+      "title": "告警总览",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "panels": [
+        {
+          "type": "table",
+          "title": "当前活跃告警",
+          "gridPos": {"h": 12, "w": 24, "x": 0, "y": 0},
+          "targets": [
+            {
+              "expr": "ALERTS",
+              "legendFormat": "{{alertname}}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"custom": {"align": "auto"}}}
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: fuze-ai-paas
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:10.4.2
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: admin
+            # Grafana 管理员密码从 Secret 注入，禁止硬编码默认凭据（admin/admin 风险）。
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: fuze-backend-secrets
+                  key: GRAFANA_ADMIN_PASSWORD
+            # 通过 Ingress 子路径 /grafana 访问
+            - name: GF_SERVER_ROOT_URL
+              value: "%(protocol)s://%(domain)s/grafana"
+            - name: GF_SERVER_SERVE_FROM_SUB_PATH
+              value: "true"
+            # 生产关闭匿名访问：大盘数据（含 GPU 库存、集群拓扑）不得对未认证用户开放。
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "false"
+          volumeMounts:
+            - name: provisioning-datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: provisioning-dashboards
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+      volumes:
+        - name: provisioning-datasources
+          configMap:
+            name: grafana-provisioning
+            items:
+              - key: datasource.yaml
+                path: datasource.yaml
+        - name: provisioning-dashboards
+          configMap:
+            name: grafana-provisioning
+            items:
+              - key: dashboard-provider.yaml
+                path: dashboard-provider.yaml
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: fuze-ai-paas
+  labels:
+    app: grafana
+spec:
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000

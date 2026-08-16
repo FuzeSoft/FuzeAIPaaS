@@ -1,0 +1,62 @@
+# ============================================================
+# KServe InferenceService 示例
+# 前置条件：集群已安装 KServe (serving.kserve.io/v1beta1)
+#   参考: https://kserve.github.io/website/latest/admin/serverless/serverless/
+# ============================================================
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: resnet50-classifier
+  namespace: fuze-ai-paas
+  labels:
+    app: fuze-ai-paas
+    managed-by: fuze-scheduler
+spec:
+  predictor:
+    # 弹性伸缩：minReplicas=0 表示支持 Scale-to-Zero
+    minReplicas: 0
+    maxReplicas: 5
+    # 基于 QPS 的并发目标（Knative）
+    scaleTarget: 10
+    scaleMetric: concurrency
+    model:
+      modelFormat:
+        name: triton
+      storageUri: s3://models/resnet50
+      resources:
+        requests:
+          cpu: "2"
+          memory: 8Gi
+        limits:
+          cpu: "2"
+          memory: 8Gi
+          # HAMi GPU 显存/算力隔离（与整卡独占二选一）
+          nvidia.com/gpu: "1"
+          nvidia.com/gpumem: "10000"   # 单位 MiB
+          nvidia.com/gpucores: "30"    # 单位 %
+---
+# 大模型推理示例（PyTorch，整卡独占）
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: llama2-7b-chat
+  namespace: fuze-ai-paas
+  labels:
+    app: fuze-ai-paas
+    managed-by: fuze-scheduler
+spec:
+  predictor:
+    minReplicas: 1
+    maxReplicas: 3
+    model:
+      modelFormat:
+        name: pytorch
+      storageUri: pvc://model-store/llama2-7b
+      resources:
+        requests:
+          cpu: "4"
+          memory: 16Gi
+        limits:
+          cpu: "4"
+          memory: 16Gi
+          nvidia.com/gpu: "1"

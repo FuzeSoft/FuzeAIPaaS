@@ -1,0 +1,98 @@
+Fuze AI PaaS
+Copyright (C) 2026  FuzePaaS Contributors
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or (at
+your option) any later version.
+
+This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Affero
+General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+The full text of the GNU Affero General Public License version 3 is
+available in the LICENSE file at the root of this repository.
+
+---
+
+Source code availability
+
+Fuze AI PaaS is a network server. Under the terms of the GNU Affero
+General Public License version 3 (section 13), if you run a modified
+version of this software that users interact with remotely over a
+computer network, you must offer those users a way to receive the
+Corresponding Source of your version. The Corresponding Source for this
+project is published at:
+
+    https://github.com/FuzePaaS/FuzePaaS
+
+---
+
+Third-party components
+
+This software distributes and depends upon a number of third-party open
+source components. Their respective licenses (including GPL-compatible
+and permissive licenses such as MIT, BSD, Apache-2.0, and others) apply
+to those components and are incorporated by reference. Each third-party
+component retains its own copyright and license notices; inclusion in
+this distribution does not modify the terms of its original license.
+
+Exact versions are pinned in the repository's dependency manifests:
+`go.mod` / `go.sum` (backend), `frontend/package.json` (frontend), and
+`sdk/python/pyproject.toml` (Python SDK). The component lists below are
+derived from those manifests.
+
+### Backend (Go) — direct dependencies
+
+| Component | Version | License |
+| --- | --- | --- |
+| github.com/evanphx/json-patch | v4.12.0+incompatible | BSD-3-Clause |
+| github.com/gin-gonic/gin | v1.10.1 | MIT |
+| github.com/go-webauthn/webauthn | v0.17.4 | MIT |
+| github.com/google/uuid | v1.6.0 | BSD-3-Clause |
+| github.com/mattn/go-sqlite3 | v1.14.17 | MIT |
+| github.com/minio/minio-go/v7 | v7.2.1 | Apache-2.0 |
+| github.com/prometheus/client_golang | v1.12.1 | Apache-2.0 |
+| golang.org/x/crypto | v0.52.0 | BSD-3-Clause |
+| golang.org/x/oauth2 | v0.16.0 | BSD-3-Clause |
+| gopkg.in/yaml.v3 | v3.0.1 | MIT / Apache-2.0 |
+| gorm.io/driver/postgres | v1.6.0 | MIT |
+| gorm.io/driver/sqlite | v1.5.4 | MIT |
+| gorm.io/gorm | v1.25.12 | MIT |
+| k8s.io/api | v0.28.3 | Apache-2.0 |
+| k8s.io/apimachinery | v0.28.3 | Apache-2.0 |
+| k8s.io/client-go | v0.28.3 | Apache-2.0 |
+
+The backend also transitively depends on many additional Go modules
+(declared as `// indirect` in `go.mod`), including `github.com/bytedance/sonic`,
+`github.com/golang-jwt/jwt/v5`, `github.com/golang/protobuf`,
+`github.com/jackc/pgx/v5`, `google.golang.org/protobuf`, and the broader
+Kubernetes / Prometheus ecosystems — each under its own compatible open
+source license.
+
+### Frontend (JavaScript / npm)
+
+| Component | Version | License |
+| --- | --- | --- |
+| react | ^18.2.0 | MIT |
+| react-dom | ^18.2.0 | MIT |
+| react-router-dom | ^6.20.0 | MIT |
+| lucide-react | ^0.294.0 | ISC |
+| recharts | ^2.10.3 | MIT |
+| @vitejs/plugin-react (dev) | ^4.2.1 | MIT |
+| vite (dev) | ^5.0.8 | MIT |
+| tailwindcss (dev) | ^3.3.6 | MIT |
+| autoprefixer (dev) | ^10.4.16 | MIT |
+| postcss (dev) | ^8.4.32 | MIT |
+| @types/react / @types/react-dom (dev) | ^18.x | MIT |
+
+### Python SDK (`fuze-ml`)
+
+The Python SDK declares **zero third-party runtime dependencies**
+(only the standard library is used). Its packaging metadata is
+licensed as Proprietary; the SDK source distributed in this repository
+remains covered by the project's AGPL-3.0 license.

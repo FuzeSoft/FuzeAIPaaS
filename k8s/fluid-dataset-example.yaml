@@ -1,0 +1,68 @@
+# ============================================================
+# Fluid 数据集 + Alluxio 缓存运行时示例
+# 前置条件：集群已安装 Fluid (data.fluid.io/v1alpha1)
+#   参考: https://github.com/fluid-cloudnative/fluid
+#
+# Fluid 会为 Dataset 自动创建同名 PVC，训练任务通过该 PVC 挂载并享受缓存加速。
+# ============================================================
+apiVersion: data.fluid.io/v1alpha1
+kind: Dataset
+metadata:
+  name: imagenet-1k
+  namespace: fuze-ai-paas
+  labels:
+    app: fuze-ai-paas
+    managed-by: fuze-scheduler
+spec:
+  mounts:
+    - mountPoint: oss://ai-datasets/imagenet-1k
+      name: imagenet-1k
+      path: /
+      options:
+        fs.oss.endpoint: oss-cn-hangzhou-internal.aliyuncs.com
+      encryptOptions:
+        - name: fs.oss.accessKeyId
+          valueFrom:
+            secretKeyRef:
+              name: oss-secret
+              key: fs.oss.accessKeyId
+        - name: fs.oss.accessKeySecret
+          valueFrom:
+            secretKeyRef:
+              name: oss-secret
+              key: fs.oss.accessKeySecret
+  accessModes:
+    - ReadOnlyMany
+---
+apiVersion: data.fluid.io/v1alpha1
+kind: AlluxioRuntime
+metadata:
+  name: imagenet-1k
+  namespace: fuze-ai-paas
+  labels:
+    app: fuze-ai-paas
+    managed-by: fuze-scheduler
+spec:
+  replicas: 3
+  tieredstore:
+    levels:
+      - mediumtype: SSD
+        path: /mnt/cache
+        quota: 200Gi
+        high: "0.95"
+        low: "0.7"
+  # 数据预热策略
+  data:
+    replicas: 1
+---
+# 数据预热任务（可选）：提前将数据加载到缓存
+apiVersion: data.fluid.io/v1alpha1
+kind: DataLoad
+metadata:
+  name: imagenet-1k-warmup
+  namespace: fuze-ai-paas
+spec:
+  dataset:
+    name: imagenet-1k
+    namespace: fuze-ai-paas
+  loadMetadata: true

@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fuze-backend
+  namespace: fuze-ai-paas
+  labels:
+    app: fuze-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fuze-backend
+  template:
+    metadata:
+      labels:
+        app: fuze-backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: fuze-backend
+      # 非 root 运行 + 最小能力集：降低容器逃逸与提权风险（安全基线）。
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        allowPrivilegeEscalation: false
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: fuze-backend
+        # 镜像 tag 由 CI 注入（见 Makefile IMAGE_TAG）。勿用 latest（不可复现）。
+        # imagePullPolicy: Always 确保 K8s 拉取指定 tag 的新镜像，避免 latest+IfNotPresent
+        # 组合导致「新构建未生效」的部署问题。
+        image: fuze-ai-paas-backend:$(IMAGE_TAG)
+        imagePullPolicy: Always
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: GIN_MODE
+          value: "release"
+        # 生产使用自托管 Postgres（StatefulSet），不再依赖 SQLite 文件，支持多副本。
+        - name: DB_DRIVER
+          value: "postgres"
+        - name: DB_DSN
+          valueFrom:
+            secretKeyRef:
+              name: fuze-backend-secrets
+              key: DB_DSN
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: fuze-backend-secrets
+              key: ADMIN_PASSWORD
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        livenessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5

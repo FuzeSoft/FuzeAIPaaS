@@ -1,0 +1,41 @@
+# Volcano Job 创建示例（由 fuze-scheduler 自动生成，此处仅作参考）
+---
+apiVersion: batch.volcano.sh/v1alpha1
+kind: Job
+metadata:
+  name: example-training-job
+  namespace: fuze-ai-paas
+  labels:
+    app: fuze-ai-paas
+    job-id: "example-001"
+    job-type: training
+    managed-by: fuze-scheduler
+spec:
+  schedulerName: volcano
+  queue: training-queue
+  minAvailable: 1
+  tasks:
+    - replicas: 1
+      name: main
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: pytorch-train
+              image: nvcr.io/nvidia/pytorch:23.10-py3
+              command: ["/bin/sh", "-c"]
+              args: ["python train.py --epochs 10"]
+              resources:
+                requests:
+                  memory: "80Gi"
+                  nvidia.com/gpu: "4"
+                limits:
+                  memory: "80Gi"
+                  nvidia.com/gpu: "4"
+              env:
+                - name: FUZE_JOB_ID
+                  value: "example-001"
+                - name: FUZE_JOB_NAME
+                  value: "example-training"
+                - name: FUZE_JOB_TYPE
+                  value: "training"
